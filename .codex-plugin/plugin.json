@@ -1,0 +1,32 @@
+{
+  "name": "maestri-autopilot",
+  "version": "0.1.0",
+  "description": "Autonomous long-horizon orchestration workflow for Maestri teams in Codex.",
+  "author": {
+    "name": "Ivan Gulkov"
+  },
+  "license": "MIT",
+  "keywords": [
+    "maestri",
+    "orchestration",
+    "hooks",
+    "agents",
+    "worktrees"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Maestri Autopilot",
+    "shortDescription": "Run supervised Maestri agent teams with hook-backed mission control.",
+    "longDescription": "Maestri Autopilot packages an orchestration skill, lifecycle hooks, and local helper scripts for long-horizon Codex sessions that coordinate Maestri agents, shared notes, browser portals, worktrees, commits, and validation loops.",
+    "developerName": "Ivan Gulkov",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use Maestri Autopilot for this project."
+    ]
+  }
+}

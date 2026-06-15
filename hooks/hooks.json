@@ -1,0 +1,91 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${PLUGIN_ROOT}/hooks/session_start.py",
+            "timeout": 30,
+            "statusMessage": "Loading Maestri Autopilot mission context"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${PLUGIN_ROOT}/hooks/user_prompt_submit.py",
+            "timeout": 30,
+            "statusMessage": "Updating Maestri Autopilot mission intake"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${PLUGIN_ROOT}/hooks/pre_maestri_policy.py",
+            "timeout": 30,
+            "statusMessage": "Checking Maestri Autopilot command policy"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${PLUGIN_ROOT}/hooks/post_maestri_observer.py",
+            "timeout": 30,
+            "statusMessage": "Recording Maestri Autopilot command results"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${PLUGIN_ROOT}/hooks/subagent_start.py",
+            "timeout": 30,
+            "statusMessage": "Injecting Maestri Autopilot worker context"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${PLUGIN_ROOT}/hooks/subagent_stop.py",
+            "timeout": 30,
+            "statusMessage": "Checking Maestri Autopilot worker completion"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${PLUGIN_ROOT}/hooks/stop_orchestrator.py",
+            "timeout": 30,
+            "statusMessage": "Checking Maestri Autopilot mission progress"
+          }
+        ]
+      }
+    ]
+  }
+}
