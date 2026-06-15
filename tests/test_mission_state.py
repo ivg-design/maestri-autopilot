@@ -14,6 +14,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from mission_state import (  # noqa: E402
+    activate_autopilot,
     default_state,
     evaluate_pre_tool_policy,
     evaluate_stop,
@@ -44,8 +45,28 @@ Commit policy: atomic commits
         self.assertEqual(parsed["allowed_presets"], ["Codex", "Claude Code"])
         self.assertEqual(parsed["worktree_policy"], "one per worker")
 
+    def test_parse_numbered_intake_text(self) -> None:
+        parsed = parse_intake_text(
+            """1. the long horizon task is to make BakerBoy fully operational
+2. see above
+3. 4 - can be codex and/or claude
+4. no restriction
+5. no preferences
+6. as needed
+7. orchestrator reviews, commits, and pushes
+"""
+        )
+        self.assertEqual(parsed["goal"], "the long horizon task is to make BakerBoy fully operational")
+        self.assertEqual(parsed["success_criteria"], ["see above"])
+        self.assertEqual(parsed["max_agents"], 4)
+        self.assertEqual(parsed["allowed_presets"], ["any"])
+        self.assertEqual(parsed["allowed_roles"], ["any"])
+        self.assertEqual(parsed["worktree_policy"], "as needed")
+        self.assertEqual(parsed["commit_policy"], "orchestrator reviews, commits, and pushes")
+
     def test_merge_intake_moves_to_planning(self) -> None:
         state = default_state("s1", "/tmp/repo")
+        activate_autopilot(state)
         changed = merge_intake_prompt(state, "Goal: ship\nMax agents: 2")
         self.assertEqual(changed, ["goal", "max_agents"])
         self.assertEqual(state["status"], "planning")
@@ -54,6 +75,7 @@ Commit policy: atomic commits
 
     def test_recruit_policy_blocks_over_cap(self) -> None:
         state = default_state("s1")
+        activate_autopilot(state)
         state["max_agents"] = 1
         state["agents"] = {"A": {"source": "maestri"}}
         hook = {"tool_input": {"command": 'maestri recruit "B" --role "Rapid Implementation Engineer"'}}
@@ -63,6 +85,7 @@ Commit policy: atomic commits
 
     def test_dismiss_policy_blocks_active_mission(self) -> None:
         state = default_state("s1")
+        activate_autopilot(state)
         state["status"] = "planning"
         hook = {"tool_input": {"command": 'maestri dismiss "A"'}}
         decision = evaluate_pre_tool_policy(state, hook)
@@ -70,6 +93,7 @@ Commit policy: atomic commits
 
     def test_observe_maestri_list_records_agents(self) -> None:
         state = default_state("s1")
+        activate_autopilot(state)
         hook = {
             "tool_input": {"command": "maestri list"},
             "tool_response": {
@@ -82,9 +106,16 @@ Commit policy: atomic commits
 
     def test_stop_continues_incomplete_mission(self) -> None:
         state = default_state("s1")
+        activate_autopilot(state)
         decision = evaluate_stop(state, {"stop_hook_active": False})
         self.assertEqual(decision["decision"], "block")
         self.assertIn("intake", decision["reason"].lower())
+
+    def test_stop_allows_inactive_mission(self) -> None:
+        state = default_state("s1")
+        decision = evaluate_stop(state, {"stop_hook_active": False})
+        self.assertTrue(decision["continue"])
+        self.assertNotIn("decision", decision)
 
     def test_stop_allows_after_already_continued(self) -> None:
         state = default_state("s1")
@@ -163,17 +194,16 @@ class HookScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
-    def test_session_start_hook_outputs_context(self) -> None:
+    def test_session_start_hook_is_silent_when_inactive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output = self.run_hook(
                 "session_start.py",
                 {"session_id": "s1", "cwd": str(ROOT), "source": "startup", "hook_event_name": "SessionStart"},
                 Path(tmp),
             )
-        self.assertEqual(output["hookSpecificOutput"]["hookEventName"], "SessionStart")
-        self.assertIn("Maestri Autopilot is active", output["hookSpecificOutput"]["additionalContext"])
+        self.assertEqual(output, {"continue": True})
 
-    def test_user_prompt_submit_hook_records_intake(self) -> None:
+    def test_user_prompt_submit_hook_is_silent_without_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output = self.run_hook(
                 "user_prompt_submit.py",
@@ -181,14 +211,46 @@ class HookScriptTests(unittest.TestCase):
                     "session_id": "s2",
                     "cwd": str(ROOT),
                     "hook_event_name": "UserPromptSubmit",
-                    "prompt": "Goal: ship\nMax agents: 2",
+                    "prompt": "What is the status?",
+                },
+                Path(tmp),
+            )
+        self.assertEqual(output, {"continue": True})
+
+    def test_user_prompt_submit_hook_activates_and_records_intake(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self.run_hook(
+                "user_prompt_submit.py",
+                {
+                    "session_id": "s2",
+                    "cwd": str(ROOT),
+                    "hook_event_name": "UserPromptSubmit",
+                    "prompt": "Use Maestri Autopilot for this project.\nGoal: ship\nMax agents: 2",
                 },
                 Path(tmp),
             )
         self.assertIn("intake", output["hookSpecificOutput"]["additionalContext"].lower())
 
+    def test_stop_hook_fails_open_on_corrupt_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "missions" / "s4.json"
+            state_file.parent.mkdir(parents=True)
+            state_file.write_text("{not json", encoding="utf-8")
+            output = self.run_hook(
+                "stop_orchestrator.py",
+                {"session_id": "s4", "hook_event_name": "Stop", "stop_hook_active": False},
+                Path(tmp),
+            )
+        self.assertEqual(output, {"continue": True})
+
     def test_subagent_stop_blocks_incomplete_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "missions" / "s3.json"
+            state_file.parent.mkdir(parents=True)
+            state_file.write_text(
+                json.dumps({"status": "planning", "autopilot_active": True}),
+                encoding="utf-8",
+            )
             output = self.run_hook(
                 "subagent_stop.py",
                 {

@@ -10,11 +10,19 @@ from _bootstrap import add_plugin_scripts_to_path
 
 add_plugin_scripts_to_path()
 
-from mission_state import hook_input_from_stdin, subagent_start_context  # noqa: E402
+from mission_state import hook_input_from_stdin, is_autopilot_active, load_state_for_hook, subagent_start_context  # noqa: E402
 
 
 def main() -> int:
-    hook = hook_input_from_stdin()
+    try:
+        hook = hook_input_from_stdin()
+        state = load_state_for_hook(hook)
+        if not is_autopilot_active(state):
+            json.dump({"continue": True}, sys.stdout)
+            return 0
+    except Exception:
+        json.dump({"continue": True}, sys.stdout)
+        return 0
     output = {
         "continue": True,
         "hookSpecificOutput": {

@@ -20,11 +20,16 @@ from mission_state import (  # noqa: E402
 
 
 def main() -> int:
-    hook = hook_input_from_stdin()
-    state = load_state_for_hook(hook)
-    decision = evaluate_pre_tool_policy(state, hook)
-    append_event(state, "pre_tool_use", decision)
-    save_state_for_hook(hook, state)
+    try:
+        hook = hook_input_from_stdin()
+        state = load_state_for_hook(hook)
+        decision = evaluate_pre_tool_policy(state, hook)
+        if decision.get("reason"):
+            append_event(state, "pre_tool_use", decision)
+            save_state_for_hook(hook, state)
+    except Exception:
+        json.dump({"continue": True}, sys.stdout)
+        return 0
 
     if decision["behavior"] == "deny":
         output = {
@@ -34,6 +39,8 @@ def main() -> int:
                 "permissionDecisionReason": decision["reason"],
             }
         }
+    elif not decision.get("reason"):
+        output = {"continue": True}
     else:
         output = {
             "hookSpecificOutput": {

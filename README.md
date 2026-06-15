@@ -85,13 +85,20 @@ python3 "$PLUGIN_ROOT/scripts/maestroctl.py" inventory
 
 ## Hook Behavior
 
-- `SessionStart`: creates/loads mission state and injects startup context.
-- `UserPromptSubmit`: captures intake fields when they are present in the prompt.
-- `PreToolUse`: guards `maestri recruit`, `maestri dismiss`, and related shell commands.
-- `PostToolUse`: records `maestri list`, `ask`, `ask --batch`, `check`, and `recruit` outcomes.
-- `SubagentStart`: adds worker discipline to Codex subagents.
-- `SubagentStop`: asks incomplete Codex subagent reports to do one more pass.
-- `Stop`: continues active missions when intake, delegation, review, validation, or integration is incomplete.
+The plugin is inactive by default. Hook scripts should be silent no-ops until a
+user explicitly asks to use Maestri Autopilot, for example:
+
+```text
+Use Maestri Autopilot for this project.
+```
+
+- `SessionStart`: deactivates stale mission state on startup/resume/clear, and only injects context for an already-active mission.
+- `UserPromptSubmit`: activates Autopilot on explicit activation prompts, then captures intake fields. It accepts both `Field: value` intake and numbered `1.` through `7.` intake.
+- `Stop`: continues active missions when intake, delegation, review, validation, or integration is incomplete. It fails open on internal errors so normal Codex work is not interrupted.
+
+The plugin no longer registers `PreToolUse` or `PostToolUse` hooks for ordinary
+shell commands. Older cached copies of those scripts also no-op silently when
+Autopilot is inactive.
 
 ## Development
 

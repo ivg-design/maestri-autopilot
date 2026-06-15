@@ -19,17 +19,21 @@ from mission_state import (  # noqa: E402
 
 
 def main() -> int:
-    hook = hook_input_from_stdin()
-    state = load_state_for_hook(hook)
-    message = observe_post_tool(state, hook)
-    save_state_for_hook(hook, state)
-    output = {
-        "continue": True,
-        "hookSpecificOutput": {
+    try:
+        hook = hook_input_from_stdin()
+        state = load_state_for_hook(hook)
+        message = observe_post_tool(state, hook)
+        if message:
+            save_state_for_hook(hook, state)
+    except Exception:
+        json.dump({"continue": True}, sys.stdout)
+        return 0
+    output = {"continue": True}
+    if message:
+        output["hookSpecificOutput"] = {
             "hookEventName": "PostToolUse",
             "additionalContext": message,
-        },
-    }
+        }
     json.dump(output, sys.stdout)
     return 0
 

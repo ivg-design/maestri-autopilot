@@ -11,7 +11,8 @@ Use this skill when the user wants a main Codex orchestrator to coordinate Maest
 
 - Treat the current Codex thread as the mission control room.
 - Use Maestri for visible teammate topology: agents, notes, and portals.
-- Use hooks for lifecycle pressure and guardrails, not for free-form planning.
+- Use hooks only for explicit Autopilot sessions. The plugin is inactive by default; ordinary Codex work should not receive hook context or per-tool ledger updates.
+- Use Stop-hook lifecycle pressure for active missions, not per-tool shell monitoring.
 - Parallelize only across disjoint work scopes or read-only investigations.
 - Keep one global mission ledger in `PLUGIN_DATA`, plus a human-readable Maestri note on the canvas.
 - Prefer worktrees for implementation workers. If worktrees are unavailable, assign non-overlapping owned paths.

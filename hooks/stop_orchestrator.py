@@ -20,11 +20,15 @@ from mission_state import (  # noqa: E402
 
 
 def main() -> int:
-    hook = hook_input_from_stdin()
-    state = load_state_for_hook(hook)
-    decision = evaluate_stop(state, hook)
-    append_event(state, "stop", {"decision": decision.get("decision", "allow")})
-    save_state_for_hook(hook, state)
+    try:
+        hook = hook_input_from_stdin()
+        state = load_state_for_hook(hook)
+        decision = evaluate_stop(state, hook)
+        if decision.get("decision") == "block":
+            append_event(state, "stop", {"decision": decision.get("decision", "allow")})
+            save_state_for_hook(hook, state)
+    except Exception:
+        decision = {"continue": True}
     json.dump(decision, sys.stdout)
     return 0
 

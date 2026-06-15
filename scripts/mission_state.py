@@ -10,6 +10,7 @@ import os
 import re
 import shlex
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -66,14 +67,15 @@ def default_state(session_id: str | None, cwd: str | None = None) -> dict[str, A
         "schema_version": SCHEMA_VERSION,
         "session_id": session_id,
         "cwd": cwd,
-        "status": "awaiting_intake",
+        "status": "inactive",
+        "autopilot_active": False,
         "goal": "",
         "success_criteria": [],
         "max_agents": None,
         "allowed_presets": DEFAULT_PRESETS[:],
         "allowed_roles": DEFAULT_ROLES[:],
         "worktree_policy": "prefer_disjoint_worktrees",
-        "commit_policy": "workers_commit_atomic_changes_before_handoff",
+        "commit_policy": "orchestrator_reviews_validates_commits_pushes",
         "agents": {},
         "tasks": {},
         "questions": [],
@@ -98,8 +100,11 @@ def default_state(session_id: str | None, cwd: str | None = None) -> dict[str, A
 
 def load_state(path: Path, session_id: str | None = None, cwd: str | None = None) -> dict[str, Any]:
     if path.exists():
-        with path.open("r", encoding="utf-8") as fh:
-            state = json.load(fh)
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                state = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return default_state(session_id, cwd)
         state.setdefault("events", [])
         state.setdefault("agents", {})
         state.setdefault("tasks", {})
@@ -107,6 +112,7 @@ def load_state(path: Path, session_id: str | None = None, cwd: str | None = None
         state.setdefault("integration_queue", [])
         state.setdefault("counters", {})
         state.setdefault("policy", {})
+        state.setdefault("autopilot_active", state.get("status") not in {"inactive", "complete"})
         return state
     return default_state(session_id, cwd)
 
@@ -114,11 +120,16 @@ def load_state(path: Path, session_id: str | None = None, cwd: str | None = None
 def save_state(path: Path, state: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     state["updated_at"] = utc_now()
-    tmp_path = path.with_suffix(".tmp")
-    with tmp_path.open("w", encoding="utf-8") as fh:
-        json.dump(state, fh, indent=2, sort_keys=True)
-        fh.write("\n")
-    tmp_path.replace(path)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        tmp_path.replace(path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
 
 
 def load_state_for_hook(hook: dict[str, Any]) -> dict[str, Any]:
@@ -138,6 +149,31 @@ def append_event(state: dict[str, Any], event_type: str, data: dict[str, Any] | 
     events.append({"time": utc_now(), "type": event_type, "data": data or {}})
     if len(events) > 200:
         del events[:-200]
+
+
+def is_autopilot_active(state: dict[str, Any]) -> bool:
+    return bool(state.get("autopilot_active")) and state.get("status") != "inactive"
+
+
+def prompt_requests_autopilot(prompt: str) -> bool:
+    text = " ".join(prompt.lower().split())
+    patterns = [
+        r"\b(use|using|start|run|invoke|activate|enable)\b.{0,80}\bmaestri autopilot\b",
+        r"\bmaestri autopilot\b.{0,80}\b(for this project|on this project|mode|mission)\b",
+    ]
+    return any(re.search(pattern, text) for pattern in patterns)
+
+
+def activate_autopilot(state: dict[str, Any]) -> None:
+    state["autopilot_active"] = True
+    if state.get("status") in {"inactive", "complete"}:
+        state["status"] = "awaiting_intake"
+
+
+def deactivate_autopilot(state: dict[str, Any]) -> None:
+    state["autopilot_active"] = False
+    if state.get("status") != "complete":
+        state["status"] = "inactive"
 
 
 def split_csv(value: str) -> list[str]:
@@ -200,6 +236,65 @@ def parse_intake_text(text: str) -> dict[str, Any]:
             multiline_values.append(line)
 
     flush_multiline()
+    fields.update(parse_numbered_intake_text(text, existing=fields))
+    return fields
+
+
+def parse_list_or_any(value: str) -> list[str]:
+    if re.search(r"\b(no restrictions?|no preferences?|any|none)\b", value, re.IGNORECASE):
+        return ["any"]
+    return split_csv(value)
+
+
+def parse_numbered_intake_text(text: str, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    present = existing or {}
+    items: dict[int, str] = {}
+    current_number: int | None = None
+    current_lines: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_number, current_lines
+        if current_number is not None:
+            items[current_number] = "\n".join(current_lines).strip()
+        current_number = None
+        current_lines = []
+
+    for raw_line in text.splitlines():
+        match = re.match(r"^\s*(\d+)[.)]\s*(.*)$", raw_line)
+        if match:
+            flush()
+            current_number = int(match.group(1))
+            current_lines = [match.group(2).strip()]
+        elif current_number is not None:
+            current_lines.append(raw_line.strip())
+    flush()
+
+    numbered_map = {
+        1: "goal",
+        2: "success_criteria",
+        3: "max_agents",
+        4: "allowed_presets",
+        5: "allowed_roles",
+        6: "worktree_policy",
+        7: "commit_policy",
+    }
+    for number, key in numbered_map.items():
+        if key in present:
+            continue
+        value = items.get(number, "").strip()
+        if not value:
+            continue
+        if key == "max_agents":
+            int_match = re.search(r"\d+", value)
+            if int_match:
+                fields[key] = int(int_match.group(0))
+        elif key in {"allowed_presets", "allowed_roles"}:
+            fields[key] = parse_list_or_any(value)
+        elif key == "success_criteria":
+            fields[key] = [value]
+        else:
+            fields[key] = value
     return fields
 
 
@@ -212,7 +307,7 @@ def merge_intake_prompt(state: dict[str, Any], prompt: str) -> list[str]:
         if state.get(key) != value:
             state[key] = value
             changed.append(key)
-    if state.get("goal") and state.get("max_agents"):
+    if is_autopilot_active(state) and state.get("goal") and state.get("max_agents"):
         state["status"] = "planning"
     return changed
 
@@ -227,6 +322,8 @@ def missing_intake_fields(state: dict[str, Any]) -> list[str]:
 
 
 def session_start_context(state: dict[str, Any]) -> str:
+    if not is_autopilot_active(state):
+        return ""
     if state.get("status") == "complete":
         return "Maestri Autopilot has a completed mission ledger for this session. Do not restart it unless the user asks."
 
@@ -244,6 +341,8 @@ def session_start_context(state: dict[str, Any]) -> str:
 
 
 def intake_context(state: dict[str, Any], missing: list[str]) -> str:
+    if not is_autopilot_active(state):
+        return ""
     if missing:
         return (
             "Maestri Autopilot intake is incomplete. Ask for these fields before recruiting agents: "
@@ -278,8 +377,8 @@ def count_recruited_agents(state: dict[str, Any]) -> int:
 def evaluate_pre_tool_policy(state: dict[str, Any], hook: dict[str, Any]) -> dict[str, str]:
     command = extract_bash_command(hook)
     words = shell_words(command)
-    if not words or words[0] != "maestri":
-        return {"behavior": "allow", "reason": "Maestri Autopilot observed a non-Maestri Bash command."}
+    if not is_autopilot_active(state) or not words or words[0] != "maestri":
+        return {"behavior": "allow", "reason": ""}
 
     subcommand = words[1] if len(words) > 1 else ""
     if subcommand == "recruit":
@@ -344,9 +443,11 @@ def observe_post_tool(state: dict[str, Any], hook: dict[str, Any]) -> str:
     command = extract_bash_command(hook)
     words = shell_words(command)
     response_text = tool_response_text(hook)
+    if not is_autopilot_active(state):
+        return ""
     if not words:
         append_event(state, "post_tool_use", {"command": ""})
-        return "Maestri Autopilot did not see a shell command to record."
+        return ""
 
     if words[:2] == ["maestri", "list"]:
         parsed_agents = parse_maestri_list(response_text)
@@ -382,7 +483,7 @@ def observe_post_tool(state: dict[str, Any], hook: dict[str, Any]) -> str:
         return f"Maestri Autopilot recorded recruit `{name}`. Assign a non-overlapping task before recruiting more."
 
     append_event(state, "post_tool_use", {"command": command[:200]})
-    return "Maestri Autopilot recorded the shell result."
+    return ""
 
 
 def active_task_names(state: dict[str, Any]) -> list[str]:
@@ -394,7 +495,7 @@ def active_task_names(state: dict[str, Any]) -> list[str]:
 
 
 def evaluate_stop(state: dict[str, Any], hook: dict[str, Any]) -> dict[str, Any]:
-    if state.get("status") == "complete":
+    if not is_autopilot_active(state) or state.get("status") == "complete":
         return {"continue": True}
     if hook.get("stop_hook_active"):
         return {
