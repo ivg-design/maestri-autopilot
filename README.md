@@ -22,6 +22,7 @@ Maestri gives Codex a canvas with connected agents, notes, and portals. This plu
 The plugin follows the Codex plugin layout:
 
 ```text
+.agents/plugins/marketplace.json
 .codex-plugin/plugin.json
 skills/maestri-autopilot/SKILL.md
 hooks/hooks.json
@@ -31,6 +32,26 @@ references/*.md
 ```
 
 Codex can discover plugin hooks from `hooks/hooks.json` when the plugin is enabled. Review and trust the hooks with `/hooks` before relying on them in a session.
+
+## Install From This Public Marketplace Repo
+
+This repository is also a Codex marketplace root. Add it as a marketplace source:
+
+```bash
+codex plugin marketplace add ivg-design/maestri-autopilot
+```
+
+Restart Codex, open `/plugins`, choose the `Maestri Autopilot` marketplace, and install the plugin.
+
+## Install Into Your Personal Local Marketplace
+
+For local development on this Mac, run:
+
+```bash
+python3 scripts/install_personal_marketplace.py
+```
+
+That copies the plugin to `~/plugins/maestri-autopilot` and creates or updates `~/.agents/plugins/marketplace.json`, which Codex discovers as the `Personal` marketplace. Restart Codex, open `/plugins`, choose `Personal`, and install `Maestri Autopilot`.
 
 ## Basic Use
 
@@ -92,4 +113,5 @@ Run helper commands:
 python3 scripts/mission_state.py --session-id demo intake-template
 python3 scripts/maestroctl.py --session-id demo init --text "Goal: demo\nMax agents: 2"
 python3 scripts/worktree_manager.py create --mission demo --agent Forge --task parser --dry-run
+python3 scripts/install_personal_marketplace.py --dry-run
 ```

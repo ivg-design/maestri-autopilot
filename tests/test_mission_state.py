@@ -119,6 +119,33 @@ class WorktreeManagerTests(unittest.TestCase):
         self.assertIn("git worktree add -b maestri/demo-mission/forge-parser-slice", result.stdout)
 
 
+class InstallerTests(unittest.TestCase):
+    def test_personal_marketplace_installer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "install_personal_marketplace.py"),
+                    "--source",
+                    str(ROOT),
+                    "--home",
+                    tmp,
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            target = Path(tmp) / "plugins" / "maestri-autopilot"
+            marketplace = Path(tmp) / ".agents" / "plugins" / "marketplace.json"
+            self.assertTrue((target / ".codex-plugin" / "plugin.json").is_file())
+            payload = json.loads(marketplace.read_text(encoding="utf-8"))
+            entries = [entry for entry in payload["plugins"] if entry["name"] == "maestri-autopilot"]
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["source"]["path"], "./plugins/maestri-autopilot")
+
+
 class HookScriptTests(unittest.TestCase):
     def run_hook(self, script: str, payload: dict[str, object], data_dir: Path) -> dict[str, object]:
         env = os.environ.copy()
