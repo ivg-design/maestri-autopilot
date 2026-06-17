@@ -1,6 +1,6 @@
 {
   "name": "maestri-autopilot",
-  "version": "0.1.0+codex.20260615135852",
+  "version": "0.1.0",
   "description": "Autonomous long-horizon orchestration workflow for Maestri teams in Codex.",
   "author": {
     "name": "Ivan Gulkov"

@@ -17,6 +17,8 @@ Use this skill when the user wants a main Codex orchestrator to coordinate Maest
 - Keep one global mission ledger in `PLUGIN_DATA`, plus a human-readable Maestri note on the canvas.
 - Prefer worktrees for implementation workers. If worktrees are unavailable, assign non-overlapping owned paths.
 - Do not recruit duplicate roles when an existing connected teammate can cover the task.
+- Delegate only meaningful long-horizon assignments. Before dispatching any subordinate task, ask: "Could I do this exact assignment myself in under 10 minutes, including validation and handoff?" If yes, do it yourself or combine it into a larger coherent workstream before delegating.
+- When the user submits a new prompt during active mission work, add the request to the active todo list at the appropriate priority and sequence instead of abandoning the current task. Only break from the current task immediately when the user explicitly asks to stop, pause, switch, or work on the new prompt now.
 - Do not mark the mission complete until validation has run and subordinate work has been reviewed.
 
 ## Mission Intake
@@ -67,10 +69,18 @@ If `PLUGIN_ROOT` is not available outside hook execution, resolve it to the inst
    - integration queue
 4. Recruit only missing roles, up to the cap.
 5. Connect shared notes to each recruit.
-6. Dispatch independent work with `maestri ask --batch`.
-7. Keep coding or validating locally while workers run.
+6. Apply the 10-minute delegation gate to every proposed assignment. A task is delegable only if it is a real long-horizon slice with enough scope, ownership, and validation depth that the orchestrator could not reasonably finish it alone in under 10 minutes.
+7. Dispatch independent work with `maestri ask --batch`.
+8. Keep coding or validating locally while workers run.
+9. When new user instructions arrive mid-stream, update the shared plan and `mission-control` note with the new or modified milestone before continuing, unless the user expressly redirects the current task.
 
 ## Delegation Rules
+
+Subordinate agents are for substantial workstreams, not small chores. Before every `maestri ask` or `maestri ask --batch`, perform this gate:
+
+1. Estimate whether the orchestrator could complete the assignment end-to-end in under 10 minutes.
+2. If yes, do not delegate it as written. Either handle it directly or expand/bundle it into a meaningful owned workstream with real implementation, investigation, or validation depth.
+3. If no, proceed only when the task has clear ownership, concrete deliverables, and a validation path.
 
 Every worker prompt must include:
 

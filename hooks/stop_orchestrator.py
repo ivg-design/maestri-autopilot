@@ -24,8 +24,11 @@ def main() -> int:
         hook = hook_input_from_stdin()
         state = load_state_for_hook(hook)
         decision = evaluate_stop(state, hook)
+        should_save = bool(decision.pop("_save_state", False))
         if decision.get("decision") == "block":
             append_event(state, "stop", {"decision": decision.get("decision", "allow")})
+            should_save = True
+        if should_save:
             save_state_for_hook(hook, state)
     except Exception:
         decision = {"continue": True}

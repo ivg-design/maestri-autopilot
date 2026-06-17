@@ -176,6 +176,26 @@ def deactivate_autopilot(state: dict[str, Any]) -> None:
         state["status"] = "inactive"
 
 
+def is_project_worker_cwd(cwd: str | None) -> bool:
+    """Detect Maestri worker role checkouts created inside a project repo."""
+    if not cwd:
+        return False
+    normalized = cwd.replace("\\", "/")
+    home_roles = str(Path.home() / ".maestri" / "roles").replace("\\", "/")
+    return "/.maestri/roles/" in normalized and not normalized.startswith(home_roles + "/")
+
+
+def should_deactivate_orphan_worker_state(state: dict[str, Any], hook: dict[str, Any]) -> bool:
+    if not is_autopilot_active(state):
+        return False
+    cwd = str(hook.get("cwd") or state.get("cwd") or "")
+    if not is_project_worker_cwd(cwd):
+        return False
+    if not missing_intake_fields(state):
+        return False
+    return not state.get("tasks")
+
+
 def split_csv(value: str) -> list[str]:
     return [part.strip() for part in re.split(r"[,;]", value) if part.strip()]
 
@@ -334,8 +354,10 @@ def session_start_context(state: dict[str, Any]) -> str:
         "ask once for the missing fields below before delegating. After intake, run `maestri list`, "
         "`maestri preset list`, and `maestri role list`; create shared notes; recruit only within the "
         "user's cap; use `maestri ask --batch` for independent work; use disjoint worktrees or "
-        "non-overlapping write scopes; check agents frequently; answer blockers; review diffs; run "
-        "validation; and only stop when the success criteria are met.\n\nMissing intake fields:\n"
+        "non-overlapping write scopes; delegate only tasks that would take you more than 10 minutes "
+        "to complete end-to-end, otherwise do them yourself or bundle them into a larger workstream; "
+        "check agents frequently; answer blockers; review diffs; run validation; and only stop when "
+        "the success criteria are met.\n\nMissing intake fields:\n"
         f"{checklist or '- none'}"
     )
 
@@ -351,8 +373,11 @@ def intake_context(state: dict[str, Any], missing: list[str]) -> str:
         )
     return (
         "Maestri Autopilot intake is available. Convert the goal into disjoint assignments, record "
-        "the plan in a shared Maestri note, recruit within the cap, dispatch with `maestri ask --batch`, "
-        "and keep validating subordinate progress until the mission is complete."
+        "the plan in a shared Maestri note, recruit within the cap, and apply the 10-minute delegation "
+        "gate before every subordinate task: if you could complete it yourself end-to-end in under "
+        "10 minutes, do it yourself or bundle it into a larger meaningful workstream. Dispatch only "
+        "substantial independent work with `maestri ask --batch`, and keep validating subordinate "
+        "progress until the mission is complete."
     )
 
 
@@ -470,7 +495,10 @@ def observe_post_tool(state: dict[str, Any], hook: dict[str, Any]) -> str:
         if "--batch" in words:
             counters["maestri_batches"] = counters.get("maestri_batches", 0) + 1
             append_event(state, "maestri_ask_batch", {"chars": len(command)})
-            return "Maestri Autopilot recorded a parallel batch dispatch. Review every returned agent result before integrating."
+            return (
+                "Maestri Autopilot recorded a parallel batch dispatch. Confirm each assignment passed "
+                "the 10-minute delegation gate, then review every returned agent result before integrating."
+            )
         counters["maestri_asks"] = counters.get("maestri_asks", 0) + 1
         target = words[2] if len(words) >= 3 else "unknown"
         append_event(state, "maestri_ask", {"target": target, "chars": len(command)})
@@ -490,41 +518,70 @@ def active_task_names(state: dict[str, Any]) -> list[str]:
     return [
         name
         for name, task in state.get("tasks", {}).items()
-        if task.get("status") not in {"complete", "cancelled", "merged"}
+        if task.get("status") not in {"complete", "cancelled", "deferred", "merged", "rejected"}
     ]
+
+
+def success_criteria_reached(state: dict[str, Any]) -> bool:
+    if state.get("status") == "complete":
+        return True
+    if state.get("success_criteria_reached") is True:
+        return True
+    completion = state.get("completion")
+    if isinstance(completion, dict) and completion.get("success_criteria_reached") is True:
+        return True
+    validation = state.get("validation")
+    if isinstance(validation, dict) and validation.get("success_criteria_reached") is True:
+        return True
+    return False
+
+
+def stop_continuation_prefix(hook: dict[str, Any]) -> str:
+    if not hook.get("stop_hook_active"):
+        return ""
+    return "A Stop-hook continuation is already active, but unfinished Autopilot work remains. "
 
 
 def evaluate_stop(state: dict[str, Any], hook: dict[str, Any]) -> dict[str, Any]:
     if not is_autopilot_active(state) or state.get("status") == "complete":
         return {"continue": True}
-    if hook.get("stop_hook_active"):
-        return {
-            "continue": True,
-            "systemMessage": "Maestri Autopilot allowed this stop because a Stop-hook continuation already ran for the current turn.",
-        }
 
+    if should_deactivate_orphan_worker_state(state, hook):
+        deactivate_autopilot(state)
+        append_event(state, "orphan_worker_autopilot_deactivated", {"cwd": hook.get("cwd") or state.get("cwd")})
+        return {"continue": True, "_save_state": True}
+
+    prefix = stop_continuation_prefix(hook)
     if missing_intake_fields(state):
         reason = (
-            "Maestri Autopilot intake is incomplete. Ask the user for the long-horizon goal, success criteria, "
+            prefix
+            + "Maestri Autopilot intake is incomplete. Ask the user for the long-horizon goal, success criteria, "
             "max agents, allowed presets/types, allowed roles, worktree policy, and commit policy. Do not recruit yet."
         )
     else:
         tasks = active_task_names(state)
         if tasks:
             reason = (
-                "Continue Maestri Autopilot orchestration. Check connected agents, answer blockers, validate completed work, "
+                prefix
+                + "Continue Maestri Autopilot orchestration. Check connected agents, answer blockers, validate completed work, "
                 f"review active tasks ({', '.join(tasks)}), update the mission ledger, and reassign idle agents."
+            )
+        elif not success_criteria_reached(state):
+            reason = (
+                prefix
+                + "Continue Maestri Autopilot validation. All tracked tasks are terminal, but success criteria have not "
+                "been explicitly reached. Review outputs, run required checks, update progress notes, and set mission "
+                "status complete or record completion.success_criteria_reached=true only when the criteria are satisfied."
             )
         elif not state.get("agents"):
             reason = (
-                "Continue Maestri Autopilot orchestration. Run `maestri list`, create shared mission/progress notes, "
-                "recruit within the cap, and dispatch disjoint long-horizon assignments."
+                prefix
+                + "Continue Maestri Autopilot orchestration. Run `maestri list`, create shared mission/progress notes, "
+                "recruit within the cap, apply the 10-minute delegation gate, and dispatch only substantial "
+                "disjoint long-horizon assignments."
             )
         else:
-            reason = (
-                "Continue Maestri Autopilot validation. Review subordinate outputs, run the required checks, integrate "
-                "or reject worktree changes, update progress notes, and mark mission status complete only when all success criteria are met."
-            )
+            return {"continue": True}
     state.setdefault("counters", {})["stop_continuations"] = state.setdefault("counters", {}).get("stop_continuations", 0) + 1
     return {"decision": "block", "reason": reason}
 
@@ -539,16 +596,16 @@ def subagent_start_context(hook: dict[str, Any]) -> str:
 
 
 def evaluate_subagent_stop(hook: dict[str, Any]) -> dict[str, Any]:
-    if hook.get("stop_hook_active"):
-        return {"continue": True}
     message = str(hook.get("last_assistant_message") or "").lower()
     required = ["changed", "validation"]
     missing = [word for word in required if word not in message]
     if missing:
+        prefix = "Stop-hook continuation is already active, but the completion report is still incomplete. " if hook.get("stop_hook_active") else ""
         return {
             "decision": "block",
             "reason": (
-                "Run one more focused completion pass: report changed files, validation commands/results, remaining risks, "
+                prefix
+                + "Run one more focused completion pass: report changed files, validation commands/results, remaining risks, "
                 "and whether the task is ready for orchestrator integration."
             ),
         }

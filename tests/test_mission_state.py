@@ -18,6 +18,7 @@ from mission_state import (  # noqa: E402
     default_state,
     evaluate_pre_tool_policy,
     evaluate_stop,
+    intake_context,
     merge_intake_prompt,
     missing_intake_fields,
     observe_post_tool,
@@ -73,6 +74,14 @@ Commit policy: atomic commits
         self.assertNotIn("goal", missing_intake_fields(state))
         self.assertNotIn("max_agents", missing_intake_fields(state))
 
+    def test_intake_context_includes_ten_minute_delegation_gate(self) -> None:
+        state = default_state("s1", "/tmp/repo")
+        activate_autopilot(state)
+        message = intake_context(state, [])
+        self.assertIn("10-minute delegation gate", message)
+        self.assertIn("under 10 minutes", message)
+        self.assertIn("bundle it into a larger meaningful workstream", message)
+
     def test_recruit_policy_blocks_over_cap(self) -> None:
         state = default_state("s1")
         activate_autopilot(state)
@@ -123,6 +132,73 @@ Commit policy: atomic commits
         self.assertTrue(decision["continue"])
         self.assertNotIn("decision", decision)
 
+    def test_stop_hook_active_still_blocks_active_tasks(self) -> None:
+        state = default_state("s1")
+        activate_autopilot(state)
+        state.update(
+            {
+                "goal": "ship",
+                "success_criteria": ["tests pass"],
+                "max_agents": 1,
+                "agents": {"A": {"source": "maestri"}},
+                "tasks": {"long-track": {"status": "assigned"}},
+            }
+        )
+        decision = evaluate_stop(state, {"stop_hook_active": True})
+        self.assertEqual(decision["decision"], "block")
+        self.assertIn("Stop-hook continuation", decision["reason"])
+        self.assertIn("long-track", decision["reason"])
+
+    def test_stop_blocks_terminal_tasks_without_success_criteria(self) -> None:
+        state = default_state("s1")
+        activate_autopilot(state)
+        state.update(
+            {
+                "goal": "ship",
+                "success_criteria": ["tests pass"],
+                "max_agents": 1,
+                "agents": {"A": {"source": "maestri"}},
+                "tasks": {"long-track": {"status": "complete"}},
+            }
+        )
+        decision = evaluate_stop(state, {"stop_hook_active": False})
+        self.assertEqual(decision["decision"], "block")
+        self.assertIn("success criteria", decision["reason"].lower())
+
+    def test_stop_allows_terminal_tasks_with_success_criteria(self) -> None:
+        state = default_state("s1")
+        activate_autopilot(state)
+        state.update(
+            {
+                "goal": "ship",
+                "success_criteria": ["tests pass"],
+                "max_agents": 1,
+                "agents": {"A": {"source": "maestri"}},
+                "tasks": {"long-track": {"status": "complete"}},
+                "completion": {"success_criteria_reached": True},
+            }
+        )
+        decision = evaluate_stop(state, {"stop_hook_active": True})
+        self.assertTrue(decision["continue"])
+        self.assertNotIn("decision", decision)
+
+    def test_stop_deactivates_orphan_project_worker_state(self) -> None:
+        state = default_state("s1", "/Users/example/repo/.maestri/roles/worker")
+        activate_autopilot(state)
+        state["agents"] = {"Codex": {"source": "maestri"}}
+        decision = evaluate_stop(state, {"stop_hook_active": False})
+        self.assertEqual(decision["continue"], True)
+        self.assertNotIn("decision", decision)
+        self.assertFalse(state["autopilot_active"])
+        self.assertEqual(state["status"], "inactive")
+
+    def test_stop_still_blocks_orchestrator_intake(self) -> None:
+        state = default_state("s1", str(Path.home() / ".maestri" / "roles" / "orchestrator"))
+        activate_autopilot(state)
+        decision = evaluate_stop(state, {"stop_hook_active": False})
+        self.assertEqual(decision["decision"], "block")
+        self.assertIn("intake", decision["reason"].lower())
+
 
 class WorktreeManagerTests(unittest.TestCase):
     def test_worktree_dry_run(self) -> None:
@@ -151,6 +227,11 @@ class WorktreeManagerTests(unittest.TestCase):
 
 
 class InstallerTests(unittest.TestCase):
+    def test_plugin_version_is_hook_cache_safe(self) -> None:
+        manifest = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["version"], "0.1.0")
+        self.assertNotIn("+", manifest["version"])
+
     def test_personal_marketplace_installer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             result = subprocess.run(
@@ -243,6 +324,32 @@ class HookScriptTests(unittest.TestCase):
             )
         self.assertEqual(output, {"continue": True})
 
+    def test_stop_hook_deactivates_orphan_worker_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "missions" / "s5.json"
+            state_file.parent.mkdir(parents=True)
+            state_file.write_text(
+                json.dumps(
+                    {
+                        "status": "awaiting_intake",
+                        "autopilot_active": True,
+                        "cwd": "/repo/.maestri/roles/worker",
+                        "agents": {"Codex": {"source": "maestri"}},
+                        "tasks": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output = self.run_hook(
+                "stop_orchestrator.py",
+                {"session_id": "s5", "hook_event_name": "Stop", "stop_hook_active": False},
+                Path(tmp),
+            )
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+        self.assertEqual(output, {"continue": True})
+        self.assertFalse(state["autopilot_active"])
+        self.assertEqual(state["status"], "inactive")
+
     def test_subagent_stop_blocks_incomplete_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "missions" / "s3.json"
@@ -263,6 +370,28 @@ class HookScriptTests(unittest.TestCase):
                 Path(tmp),
             )
         self.assertEqual(output["decision"], "block")
+
+    def test_subagent_stop_hook_active_still_blocks_incomplete_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "missions" / "s6.json"
+            state_file.parent.mkdir(parents=True)
+            state_file.write_text(
+                json.dumps({"status": "planning", "autopilot_active": True}),
+                encoding="utf-8",
+            )
+            output = self.run_hook(
+                "subagent_stop.py",
+                {
+                    "session_id": "s6",
+                    "hook_event_name": "SubagentStop",
+                    "agent_type": "worker",
+                    "last_assistant_message": "Done.",
+                    "stop_hook_active": True,
+                },
+                Path(tmp),
+            )
+        self.assertEqual(output["decision"], "block")
+        self.assertIn("completion report", output["reason"])
 
 
 if __name__ == "__main__":

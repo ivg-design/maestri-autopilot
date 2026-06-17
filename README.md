@@ -53,6 +53,10 @@ python3 scripts/install_personal_marketplace.py
 
 That copies the plugin to `~/plugins/maestri-autopilot` and creates or updates `~/.agents/plugins/marketplace.json`, which Codex discovers as the `Personal` marketplace. Restart Codex, open `/plugins`, choose `Personal`, and install `Maestri Autopilot`.
 
+The plugin version intentionally uses plain semver without `+` build metadata.
+Codex resolves hook cache roots by the plain version, so metadata-suffixed
+versions can leave lifecycle hooks pointing at a missing cache directory.
+
 ## Basic Use
 
 Ask Codex:

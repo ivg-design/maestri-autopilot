@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -15,6 +16,7 @@ PLUGIN_NAME = "maestri-autopilot"
 MARKETPLACE_NAME = "personal"
 EXCLUDED_DIRS = {".git", "__pycache__", ".pytest_cache", ".maestri", ".venv", "venv"}
 EXCLUDED_FILES = {".DS_Store"}
+PLUGIN_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 
 
 def repo_root_from_script() -> Path:
@@ -83,6 +85,12 @@ def assert_plugin_root(path: Path) -> None:
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     if payload.get("name") != PLUGIN_NAME:
         raise ValueError(f"{manifest} is not the {PLUGIN_NAME} manifest.")
+    version = payload.get("version")
+    if not isinstance(version, str) or not PLUGIN_VERSION_RE.match(version):
+        raise ValueError(
+            f"{manifest} version must be plain semver without build metadata; "
+            "Codex hook cache paths are resolved without '+' build suffixes."
+        )
 
 
 def copy_plugin(source: Path, target: Path, force: bool) -> None:
